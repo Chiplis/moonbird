@@ -1,14 +1,11 @@
-use std::collections::HashMap;
 use std::io::{Cursor};
 use std::time::Duration;
 use again::RetryPolicy;
 use bytes::Bytes;
 use chashmap::CHashMap;
-use futures::{future, StreamExt};
-use reqwest::Error;
+use futures::{StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
-use serde::__private::de::IdentifierDeserializer;
 
 #[tokio::main]
 async fn main() {
@@ -23,10 +20,6 @@ async fn main() {
         Some(default_bearer.to_string())
     }).unwrap();
     download(id, true, bearer).await;
-}
-
-fn parse(id: String) -> u64 {
-    return id.parse().unwrap();
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -154,7 +147,7 @@ async fn download(id: &String, info: bool, bearer: &String) {
     let chunks = chunks.iter()
         .map(|chunk| format!("{}{}", base[0], chunk))
         .map(|chunk| {
-            let f = fetch_url(&map, size, index, chunk, format!("c{}.aac", index));
+            let f = fetch_url(&map, size, index, chunk);
             index += 1;
             f
         });
@@ -172,7 +165,7 @@ async fn download(id: &String, info: bool, bearer: &String) {
     std::io::copy(&mut content, &mut file).unwrap();
 }
 
-async fn fetch_url(mut map: &CHashMap<i32, Bytes>, size: usize, index: i32, url: String, file_name: String) {
+async fn fetch_url(map: &CHashMap<i32, Bytes>, size: usize, index: i32, url: String) {
     let op = || {
         println!("Attempting to download chunk #{}", index);
         reqwest::get(url.clone())
@@ -214,50 +207,4 @@ struct Stream {
 #[derive(Debug, Serialize, Deserialize)]
 struct Source {
     location: String,
-}
-
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Status {
-    user: User,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ExtendedEntities {
-    media: Vec<Media>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Media {
-    media_url: String,
-    video_info: VideoInfo,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct VideoInfo {
-    variants: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct User {
-    name: String,
-}
-
-impl Status {
-    async fn new(guest: &Guest, bearer: &String, id: u64) -> Status {
-        let buf = format!(
-            "https://api.twitter.com/1.1/statuses/show/{}{}",
-            id,
-            ".json?tweet_mode=extended"
-        );
-        let client = reqwest::Client::new();
-        let response = client.get(buf)
-            .header(AUTHORIZATION, bearer)
-            .header("X-Guest-Token", guest.guest_token.clone())
-            .send()
-            .await
-            .unwrap();
-        let response = response.json::<Status>().await.unwrap();
-        response
-    }
 }
