@@ -104,6 +104,13 @@ struct Admin {
 
 impl Space {
     async fn new(guest: &Guest, bearer: &String, id: &String) -> Space {
+        let id: &String = &id.split("https://twitter.com/i/spaces/")
+            .map(str::to_string)
+            .collect::<String>()
+            .split("?")
+            .map(str::to_string)
+            .collect::<Vec<String>>()[0];
+
         let address = format!(
             "https://twitter.com/i/api/graphql/Uv5R_-Chxbn1FEkyUkSW2w/AudioSpaceById?variables=%7B%22id%22%3A%22{}%22%2C%22isMetatagsQuery%22%3Afalse%2C%22withBirdwatchPivots%22%3Afalse%2C%22withDownvotePerspective%22%3Afalse%2C%22withReactionsMetadata%22%3Afalse%2C%22withReactionsPerspective%22%3Afalse%2C%22withReplays%22%3Afalse%2C%22withScheduledSpaces%22%3Afalse%2C%22withSuperFollowsTweetFields%22%3Afalse%2C%22withSuperFollowsUserFields%22%3Afalse%7D",
             id
