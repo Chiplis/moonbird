@@ -2,24 +2,48 @@ use std::io::{Cursor};
 use std::time::Duration;
 use again::RetryPolicy;
 use bytes::Bytes;
+use clap::Parser;
 use chashmap::CHashMap;
 use futures::{StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    /// ID of the space to download
+    #[clap(short, long)]
+    space: String,
+
+    /// Authentication token to get required metadata
+    #[clap(
+        short,
+        long,
+        default_value = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+    )]
+    bearer: String,
+
+    // Name for the generated audio file
+    #[clap(short, long)]
+    path: Option<String>
+}
+
 #[tokio::main]
 async fn main() {
-    let default_bearer = &format!(
-        "Bearer {}={}",
-        "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs",
-        "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
-    );
-    let id = &std::env::args().nth(1).expect("Missing space ID");
-    let bearer = &std::env::args().nth(2).or_else(|| {
-        println!("No bearer detected, falling back to default token");
-        Some(default_bearer.to_string())
-    }).unwrap();
-    download(id, true, bearer).await;
+
+    let args = Args::parse();
+
+    let id = &args.space;
+
+    let bearer = &format!("Bearer {}", args.bearer);
+
+    let name = &args.path.or_else(|| {
+        println!("No name specified, will create audio file with default space name");
+        None
+    });
+
+    download(id, name,true, bearer).await;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -101,7 +125,7 @@ impl Space {
 
     fn name(&self) -> String {
         format!(
-            "{}.aac",
+            "{}",
             &self.data.audio_space.metadata.title
         )
     }
@@ -124,7 +148,7 @@ impl Space {
     }
 }
 
-async fn download(id: &String, info: bool, bearer: &String) {
+async fn download(id: &String, name: &Option<String>, info: bool, bearer: &String) {
     let guest = &Guest::new(bearer).await;
     let space = Space::new(guest, bearer, id).await;
     let stream = space.stream(&guest, bearer).await;
@@ -155,7 +179,8 @@ async fn download(id: &String, info: bool, bearer: &String) {
     let chunks = futures::stream::iter(chunks).buffer_unordered(20);
     chunks.collect::<Vec<_>>().await;
 
-    let mut file = std::fs::File::create(space.name()).unwrap();
+    let name = name.clone().unwrap_or(space.name()) + ".aac";
+    let mut file = std::fs::File::create(name).unwrap();
     let mut bytes: Vec<u8> = vec![];
     for i in 0..size {
         println!("Appending chunk #{} of {}", i, size);
