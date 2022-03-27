@@ -1,0 +1,16 @@
+[package]
+name = "moonbird"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+url-escape = "*"
+chashmap = "*"
+bytes = "*"
+again = "*"
+futures = "*"
+reqwest = { version = "*", features = ["json"] }
+serde = { version = "*", features = ["derive"] }
+tokio = { version = "1.12.0", features = ["full"] } # for our async runtime
