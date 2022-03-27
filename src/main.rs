@@ -12,13 +12,16 @@ use serde::__private::de::IdentifierDeserializer;
 
 #[tokio::main]
 async fn main() {
-    let bearer = &format!(
+    let default_bearer = &format!(
         "Bearer {}={}",
         "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs",
         "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
     );
-    let id = &format!("1BRJjnWlQXBJw");
-    let guest = &Guest::new(&bearer).await;
+    let id = &std::env::args().nth(1).expect("Missing space ID");
+    let bearer = &std::env::args().nth(2).or_else(|| {
+        println!("No bearer detected, falling back to default token");
+        Some(default_bearer.to_string())
+    }).unwrap();
     download(id, true, bearer).await;
 }
 
