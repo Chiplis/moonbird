@@ -3,7 +3,6 @@ use std::time::Duration;
 use again::RetryPolicy;
 use bytes::Bytes;
 use clap::Parser;
-use chashmap::CHashMap;
 use futures::{StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
@@ -18,20 +17,19 @@ struct Args {
 
     /// Authentication token to get required metadata
     #[clap(
-        short,
-        long,
-        default_value = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+    short,
+    long,
+    default_value = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
     )]
     bearer: String,
 
     // Name for the generated audio file
     #[clap(short, long)]
-    path: Option<String>
+    path: Option<String>,
 }
 
 #[tokio::main]
 async fn main() {
-
     let args = Args::parse();
 
     let id = &args.space;
@@ -43,7 +41,7 @@ async fn main() {
         None
     });
 
-    download(id, name,true, bearer).await;
+    download(id, name, true, bearer).await;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,11 +128,8 @@ impl Space {
         self.data.audio_space.participants.admins.iter().map(|admin| format!("{}{}", admin.display_name, ",")).collect()
     }
 
-    fn name(&self) -> String {
-        format!(
-            "{}",
-            &self.data.audio_space.metadata.title
-        )
+    fn name(&self) -> &String {
+        &self.data.audio_space.metadata.title
     }
 
     async fn stream(&self, guest: &Guest, bearer: &String) -> Stream {
@@ -161,57 +156,58 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     let stream = space.stream(&guest, bearer).await;
     let location = stream.source.location.as_str();
     let base: Vec<String> = location.split("playlist").map(str::to_string).collect();
+    let space_name = space.name();
     if info {
         println!(
             "Admins: {}\nTitle: {}\nLocation: {}",
             space.admins(),
-            &space.data.audio_space.metadata.title,
+            space_name,
             location
         )
     }
     let chunks = stream.chunks(guest, bearer).await;
     let chunks: Vec<String> = chunks.split("\n").filter(|c| !c.contains("#")).map(str::to_string).collect();
     let size = chunks.len();
-    println!("Chunks: {}", size);
     let mut index = 0;
-    let map = CHashMap::new();
     let chunks = chunks.iter()
         .map(|chunk| format!("{}{}", base[0], chunk))
         .map(|chunk| {
-            let f = fetch_url(&map, size, index, chunk);
+            let f = fetch_url(size, index, chunk);
             index += 1;
             f
         });
 
-    let chunks = futures::stream::iter(chunks).buffer_unordered(20);
-    chunks.collect::<Vec<_>>().await;
+    let chunks = futures::stream::iter(chunks).buffered(20);
+    let chunks: Vec<u8> = chunks.collect::<Vec<Bytes>>()
+        .await
+        .into_iter()
+        .map(|b| b.to_vec())
+        .flatten()
+        .collect();
+    let bytes = Bytes::from(chunks);
 
-    let name = name.clone().unwrap_or(space.name()) + ".aac";
+    let name = name.clone().unwrap_or(space_name.clone()) + ".aac";
     let mut file = std::fs::File::create(name).unwrap();
-    let mut bytes: Vec<u8> = vec![];
-    for i in 0..size {
-        println!("Appending chunk #{} of {}", i + 1, size);
-        bytes.append(&mut map.get(&(i as i32)).unwrap().to_vec());
-    }
     let mut content = Cursor::new(Bytes::from(bytes));
     std::io::copy(&mut content, &mut file).unwrap();
 }
 
-async fn fetch_url(map: &CHashMap<i32, Bytes>, size: usize, index: i32, url: String) {
-    let op = || {
-        println!("Attempting to download chunk #{}", index + 1);
-        reqwest::get(url.clone())
-    };
+async fn fetch_url(size: usize, index: i32, url: String) -> Bytes {
     let policy = RetryPolicy::exponential(Duration::from_secs(1))
         .with_max_retries(5)
         .with_jitter(true);
-    let response = policy.retry(op).await;
+    let response = policy.retry(|| reqwest::get(url.clone())).await;
     if response.is_err() {
         panic!("Error while downloading chunk #{}, response: {:?}", index + 1, response)
     }
     let response = response.unwrap();
-    map.insert(index, response.bytes().await.unwrap());
-    println!("Finished downloading chunk #{} - {}/{} Downloaded", index + 1, map.len(), size);
+    let bytes = response.bytes().await.unwrap();
+    println!(
+        "Chunk {}/{} Downloaded",
+        index + 1,
+        size
+    );
+    bytes
 }
 
 

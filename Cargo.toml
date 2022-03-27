@@ -7,12 +7,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "*", features = ["derive"] }
-url-escape = "*"
-chashmap = "*"
 bytes = "*"
 again = "*"
 futures = "*"
+clap = { version = "*", features = ["derive"] }
 reqwest = { version = "*", features = ["json"] }
 serde = { version = "*", features = ["derive"] }
 tokio = { version = "*", features = ["full"] }
