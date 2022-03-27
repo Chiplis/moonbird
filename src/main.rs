@@ -151,12 +151,15 @@ impl Space {
 }
 
 async fn download(id: &String, name: &Option<String>, info: bool, bearer: &String) {
+
     let guest = &Guest::new(bearer).await;
     let space = Space::new(guest, bearer, id).await;
     let stream = space.stream(&guest, bearer).await;
+
     let location = stream.source.location.as_str();
-    let base: Vec<String> = location.split("playlist").map(str::to_string).collect();
+    let base_uri: Vec<String> = location.split("playlist").map(str::to_string).collect();
     let space_name = space.name();
+
     if info {
         println!(
             "Admins: {}\nTitle: {}\nLocation: {}",
@@ -165,34 +168,37 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
             location
         )
     }
+
     let chunks = stream.chunks(guest, bearer).await;
-    let chunks: Vec<String> = chunks.split("\n").filter(|c| !c.contains("#")).map(str::to_string).collect();
+    let chunks: Vec<String> = chunks
+        .split("\n")
+        .filter(|c| !c.contains("#")).
+        map(str::to_string).collect();
     let size = chunks.len();
+
     let mut index = 0;
-    let chunks = chunks.iter()
-        .map(|chunk| format!("{}{}", base[0], chunk))
+    let mut bytes = vec![vec![]; size].into_iter();
+    let mut data = bytes.as_mut_slice().chunks_mut(1);
+
+    let chunks = chunks
+        .iter()
+        .map(|chunk| format!("{}{}", base_uri[0], chunk))
         .map(|chunk| {
-            let f = fetch_url(size, index, chunk);
+            let f = fetch_url(size, &mut data.nth(0).unwrap()[0], index, chunk);
             index += 1;
             f
         });
 
-    let chunks = futures::stream::iter(chunks).buffered(20);
-    let chunks: Vec<u8> = chunks.collect::<Vec<Bytes>>()
-        .await
-        .into_iter()
-        .map(|b| b.to_vec())
-        .flatten()
-        .collect();
-    let bytes = Bytes::from(chunks);
+    futures::stream::iter(chunks).buffer_unordered(25).collect::<()>().await;
 
     let name = name.clone().unwrap_or(space_name.clone()) + ".aac";
     let mut file = std::fs::File::create(name).unwrap();
-    let mut content = Cursor::new(Bytes::from(bytes));
+    let bytes = Bytes::from(bytes.flatten().collect::<Vec<u8>>());
+    let mut content = Cursor::new(bytes);
     std::io::copy(&mut content, &mut file).unwrap();
 }
 
-async fn fetch_url(size: usize, index: i32, url: String) -> Bytes {
+async fn fetch_url(size: usize, data: &mut Vec<u8>, index: i32, url: String) {
     let policy = RetryPolicy::exponential(Duration::from_secs(1))
         .with_max_retries(5)
         .with_jitter(true);
@@ -207,7 +213,7 @@ async fn fetch_url(size: usize, index: i32, url: String) -> Bytes {
         index + 1,
         size
     );
-    bytes
+    data.append(&mut bytes.to_vec());
 }
 
 
