@@ -8,7 +8,7 @@ use futures::{StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 
-/// Simple program to greet a person
+
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
@@ -190,7 +190,7 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     let mut file = std::fs::File::create(name).unwrap();
     let mut bytes: Vec<u8> = vec![];
     for i in 0..size {
-        println!("Appending chunk #{} of {}", i, size);
+        println!("Appending chunk #{} of {}", i + 1, size);
         bytes.append(&mut map.get(&(i as i32)).unwrap().to_vec());
     }
     let mut content = Cursor::new(Bytes::from(bytes));
@@ -199,7 +199,7 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
 
 async fn fetch_url(map: &CHashMap<i32, Bytes>, size: usize, index: i32, url: String) {
     let op = || {
-        println!("Attempting to download chunk #{}", index);
+        println!("Attempting to download chunk #{}", index + 1);
         reqwest::get(url.clone())
     };
     let policy = RetryPolicy::exponential(Duration::from_secs(1))
@@ -207,11 +207,11 @@ async fn fetch_url(map: &CHashMap<i32, Bytes>, size: usize, index: i32, url: Str
         .with_jitter(true);
     let response = policy.retry(op).await;
     if response.is_err() {
-        panic!("Error while downloading chunk #{}, response: {:?}", index, response)
+        panic!("Error while downloading chunk #{}, response: {:?}", index + 1, response)
     }
     let response = response.unwrap();
     map.insert(index, response.bytes().await.unwrap());
-    println!("Finished downloading chunk #{} - {}/{} Downloaded", index, map.len(), size);
+    println!("Finished downloading chunk #{} - {}/{} Downloaded", index + 1, map.len(), size);
 }
 
 
