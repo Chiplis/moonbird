@@ -1,4 +1,5 @@
 # moonbird
+A small utility that lets you download a copy of a previously published Twitter Space for local playback.
 
 ## Building
 ```cargo build --release```
