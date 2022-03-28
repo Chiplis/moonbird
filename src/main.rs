@@ -7,27 +7,6 @@ use futures::{StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 
-
-#[derive(Parser, Debug)]
-#[clap(author, version, about, long_about = None)]
-struct Args {
-    /// ID of the space to download
-    #[clap(short, long)]
-    space: String,
-
-    /// Authentication token to get required metadata
-    #[clap(
-    short,
-    long,
-    default_value = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
-    )]
-    bearer: String,
-
-    // Name for the generated audio file
-    #[clap(short, long)]
-    path: Option<String>,
-}
-
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -41,7 +20,9 @@ async fn main() {
         None
     });
 
-    download(id, name, true, bearer).await;
+    let concurrency = args.concurrency;
+
+    download(id, name, true, bearer, concurrency).await;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,41 +44,6 @@ impl Guest {
         println!("Guest:\n{:?}", response);
         response
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Space {
-    data: Data,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Data {
-    #[serde(rename(serialize = "audioSpace", deserialize = "audioSpace"))]
-    audio_space: AudioSpace,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct AudioSpace {
-    metadata: Metadata,
-    participants: Participants,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Metadata {
-    media_key: String,
-    started_at: i64,
-    ended_at: String,
-    title: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Participants {
-    admins: Vec<Admin>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Admin {
-    display_name: String,
 }
 
 impl Space {
@@ -150,7 +96,7 @@ impl Space {
     }
 }
 
-async fn download(id: &String, name: &Option<String>, info: bool, bearer: &String) {
+async fn download(id: &String, name: &Option<String>, info: bool, bearer: &String, concurrency: usize) {
 
     let guest = &Guest::new(bearer).await;
     let space = Space::new(guest, bearer, id).await;
@@ -161,12 +107,7 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     let space_name = space.name();
 
     if info {
-        println!(
-            "Admins: {}\nTitle: {}\nLocation: {}",
-            space.admins(),
-            space_name,
-            location
-        )
+        println!("Admins: {}\nTitle: {}\nLocation: {}", space.admins(), space_name, location);
     }
 
     let chunks = stream.chunks(guest, bearer).await;
@@ -177,23 +118,24 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     let size = chunks.len();
 
     let mut index = 0;
-    let mut bytes = vec![vec![]; size].into_iter();
-    let mut data = bytes.as_mut_slice().chunks_mut(1);
+    let mut fragments = vec![vec![]; size].into_iter();
+    let mut fragment_chunks = fragments.as_mut_slice().chunks_exact_mut(1);
 
     let chunks = chunks
         .iter()
         .map(|chunk| format!("{}{}", base_uri[0], chunk))
         .map(|chunk| {
-            let f = fetch_url(size, &mut data.nth(0).unwrap()[0], index, chunk);
+            let fragment = &mut fragment_chunks.nth(0).unwrap()[0];
+            let f = fetch_url(size, fragment, index, chunk);
             index += 1;
             f
         });
 
-    futures::stream::iter(chunks).buffer_unordered(25).collect::<()>().await;
+    futures::stream::iter(chunks).buffer_unordered(concurrency).collect::<()>().await;
 
     let name = name.clone().unwrap_or(space_name.clone()) + ".aac";
     let mut file = std::fs::File::create(name).unwrap();
-    let bytes = Bytes::from(bytes.flatten().collect::<Vec<u8>>());
+    let bytes = Bytes::from(fragments.flatten().collect::<Vec<u8>>());
     let mut content = Cursor::new(bytes);
     std::io::copy(&mut content, &mut file).unwrap();
 }
@@ -202,18 +144,16 @@ async fn fetch_url(size: usize, data: &mut Vec<u8>, index: i32, url: String) {
     let policy = RetryPolicy::exponential(Duration::from_secs(1))
         .with_max_retries(5)
         .with_jitter(true);
+
     let response = policy.retry(|| reqwest::get(url.clone())).await;
     if response.is_err() {
         panic!("Error while downloading chunk #{}, response: {:?}", index + 1, response)
     }
     let response = response.unwrap();
+
     let bytes = response.bytes().await.unwrap();
-    println!(
-        "Chunk {}/{} Downloaded",
-        index + 1,
-        size
-    );
     data.append(&mut bytes.to_vec());
+    println!("Chunk #{} of {} Downloaded", index + 1, size);
 }
 
 
@@ -231,6 +171,64 @@ impl Stream {
             .unwrap();
         s
     }
+}
+
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    /// ID of the space to download
+    #[clap(short, long)]
+    space: String,
+
+    // Name for the generated audio file
+    #[clap(short, long)]
+    path: Option<String>,
+
+    // Maximum allowed amount of concurrent fragment requests while downloading space
+    #[clap(short, long, default_value_t = 25)]
+    concurrency: usize,
+
+    /// Authentication token to get required metadata
+    #[clap(
+    short, long,
+    default_value = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+    )]
+    bearer: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Space {
+    data: Data,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Data {
+    #[serde(rename(serialize = "audioSpace", deserialize = "audioSpace"))]
+    audio_space: AudioSpace,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AudioSpace {
+    metadata: Metadata,
+    participants: Participants,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Metadata {
+    media_key: String,
+    started_at: i64,
+    ended_at: String,
+    title: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Participants {
+    admins: Vec<Admin>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Admin {
+    display_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
