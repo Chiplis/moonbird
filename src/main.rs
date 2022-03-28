@@ -1,4 +1,5 @@
 use std::io::{Cursor};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use again::RetryPolicy;
 use bytes::Bytes;
@@ -104,7 +105,10 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
 
     let location = stream.source.location.as_str();
     let base_uri: Vec<String> = location.split("playlist").map(str::to_string).collect();
-    let space_name = space.name();
+    let space_name: String = space.name()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect();
 
     if info {
         println!("Admins: {}\nTitle: {}\nLocation: {}", space.admins(), space_name, location);
@@ -121,26 +125,27 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     let mut fragments = vec![vec![]; size].into_iter();
     let mut fragment_chunks = fragments.as_mut_slice().chunks_exact_mut(1);
 
+    let count = AtomicUsize::new(0);
     let chunks = chunks
         .iter()
         .map(|chunk| format!("{}{}", base_uri[0], chunk))
         .map(|chunk| {
             let fragment = &mut fragment_chunks.nth(0).unwrap()[0];
-            let f = fetch_url(size, fragment, index, chunk);
+            let f = fetch_url(size, fragment, index, chunk, &count);
             index += 1;
             f
         });
 
     futures::stream::iter(chunks).buffer_unordered(concurrency).collect::<()>().await;
 
-    let name = name.clone().unwrap_or(space_name.clone()) + ".aac";
+    let name = name.clone().unwrap_or(space_name) + ".aac";
     let mut file = std::fs::File::create(name).unwrap();
     let bytes = Bytes::from(fragments.flatten().collect::<Vec<u8>>());
     let mut content = Cursor::new(bytes);
     std::io::copy(&mut content, &mut file).unwrap();
 }
 
-async fn fetch_url(size: usize, data: &mut Vec<u8>, index: i32, url: String) {
+async fn fetch_url(size: usize, data: &mut Vec<u8>, index: i32, url: String, count: &AtomicUsize) {
     let policy = RetryPolicy::exponential(Duration::from_secs(1))
         .with_max_retries(5)
         .with_jitter(true);
@@ -153,7 +158,8 @@ async fn fetch_url(size: usize, data: &mut Vec<u8>, index: i32, url: String) {
 
     let bytes = response.bytes().await.unwrap();
     data.append(&mut bytes.to_vec());
-    println!("Chunk #{} of {} Downloaded", index + 1, size);
+    count.fetch_add(1, Ordering::SeqCst);
+    println!("Chunk #{} Downloaded - {} Remaining", index + 1, size - count.load(Ordering::SeqCst));
 }
 
 
