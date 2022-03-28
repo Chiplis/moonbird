@@ -8,4 +8,4 @@ A small utility that lets you download a copy of a previously published Twitter 
 ## Usage
 Arguments between curly braces are mandatory, those between brackets are optional and will fallback to default values.
 
-```./moonbird -s {SpaceID} -b [BearerToken] -p [AudioFileName]```
+```./moonbird -s {SpaceID} -b [BearerToken] -p [AudioFileName] -c [MaxConcurrentFragmentDownloads]```
