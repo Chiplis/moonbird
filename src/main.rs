@@ -34,7 +34,8 @@ struct Guest {
 impl Guest {
     async fn new(bearer: &String) -> Guest {
         let client = reqwest::Client::new();
-        let response = client.post("https://api.twitter.com/1.1/guest/activate.json")
+        let response = client
+            .post("https://api.twitter.com/1.1/guest/activate.json")
             .header(AUTHORIZATION, bearer)
             .send()
             .await
@@ -49,7 +50,8 @@ impl Guest {
 
 impl Space {
     async fn new(guest: &Guest, bearer: &String, id: &String) -> Space {
-        let id: &String = &id.split("https://twitter.com/i/spaces/")
+        let id: &String = &id
+            .split("https://twitter.com/i/spaces/")
             .map(str::to_string)
             .collect::<String>()
             .split("?")
@@ -60,19 +62,26 @@ impl Space {
             "https://twitter.com/i/api/graphql/Uv5R_-Chxbn1FEkyUkSW2w/AudioSpaceById?variables=%7B%22id%22%3A%22{}%22%2C%22isMetatagsQuery%22%3Afalse%2C%22withBirdwatchPivots%22%3Afalse%2C%22withDownvotePerspective%22%3Afalse%2C%22withReactionsMetadata%22%3Afalse%2C%22withReactionsPerspective%22%3Afalse%2C%22withReplays%22%3Afalse%2C%22withScheduledSpaces%22%3Afalse%2C%22withSuperFollowsTweetFields%22%3Afalse%2C%22withSuperFollowsUserFields%22%3Afalse%7D",
             id
         );
+
         println!("{}", address);
+
         let client = reqwest::Client::new();
-        let res = client.get(address.to_string())
+        let res = client
+            .get(address.to_string())
             .header(AUTHORIZATION, bearer)
             .header("X-Guest-Token", guest.guest_token.clone())
             .send()
             .await
             .unwrap();
+
         res.json::<Space>().await.unwrap()
     }
 
     fn admins(&self) -> String {
-        self.data.audio_space.participants.admins.iter().map(|admin| format!("{}{}", admin.display_name, ",")).collect()
+        self.data.audio_space.participants.admins
+            .iter()
+            .map(|admin| format!("{}{}", admin.display_name, ","))
+            .collect()
     }
 
     fn name(&self) -> &String {
@@ -85,7 +94,8 @@ impl Space {
             &self.data.audio_space.metadata.media_key
         );
         let client = reqwest::Client::new();
-        client.get(address)
+        client
+            .get(address)
             .header(AUTHORIZATION, bearer)
             .header("X-Guest-Token", guest.guest_token.clone())
             .send()
@@ -105,7 +115,8 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
 
     let location = stream.source.location.as_str();
     let base_uri: Vec<String> = location.split("playlist").map(str::to_string).collect();
-    let space_name: String = space.name()
+    let space_name: String = space
+        .name()
         .chars()
         .filter(|c| c.is_alphanumeric() || c.is_whitespace())
         .collect();
@@ -114,14 +125,15 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
         println!("Admins: {}\nTitle: {}\nLocation: {}", space.admins(), space_name, location);
     }
 
-    let chunks = stream.chunks(guest, bearer).await;
-    let chunks: Vec<String> = chunks
+    let chunks: Vec<String> = stream
+        .chunks(guest, bearer)
+        .await
         .split("\n")
-        .filter(|c| !c.contains("#")).
-        map(str::to_string).collect();
+        .filter(|c| !c.contains("#"))
+        .map(str::to_string).collect();
     let size = chunks.len();
 
-    let mut index = 0;
+    let mut index = 1;
     let mut fragments = vec![vec![]; size].into_iter();
     let mut fragment_chunks = fragments.as_mut_slice().chunks_exact_mut(1);
 
@@ -129,9 +141,9 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     let chunks = chunks
         .iter()
         .map(|chunk| format!("{}{}", base_uri[0], chunk))
-        .map(|chunk| {
+        .map(|chunk_url| {
             let fragment = &mut fragment_chunks.nth(0).unwrap()[0];
-            let f = fetch_url(size, fragment, index, chunk, &count);
+            let f = fetch_url(size, fragment, index, chunk_url, &count);
             index += 1;
             f
         });
@@ -150,16 +162,14 @@ async fn fetch_url(size: usize, data: &mut Vec<u8>, index: i32, url: String, cou
         .with_max_retries(5)
         .with_jitter(true);
 
-    let response = policy.retry(|| reqwest::get(url.clone())).await;
-    if response.is_err() {
-        panic!("Error while downloading chunk #{}, response: {:?}", index + 1, response)
-    }
-    let response = response.unwrap();
+    let response = policy.retry(|| reqwest::get(&url))
+        .await
+        .unwrap_or_else(|e| panic!("Error while downloading chunk #{}:\n{}", index, e));
 
     let bytes = response.bytes().await.unwrap();
     data.append(&mut bytes.to_vec());
     count.fetch_add(1, Ordering::SeqCst);
-    println!("Chunk #{} Downloaded - {} Remaining", index + 1, size - count.load(Ordering::SeqCst));
+    println!("Chunk #{} Downloaded - {} Remaining", index, size - count.load(Ordering::SeqCst));
 }
 
 
@@ -186,11 +196,11 @@ struct Args {
     #[clap(short, long)]
     space: String,
 
-    // Name for the generated audio file
+    /// Name for the generated audio file
     #[clap(short, long)]
     path: Option<String>,
 
-    // Maximum allowed amount of concurrent fragment requests while downloading space
+    /// Maximum allowed amount of concurrent fragment requests while downloading space
     #[clap(short, long, default_value_t = 25)]
     concurrency: usize,
 
@@ -222,8 +232,6 @@ struct AudioSpace {
 #[derive(Debug, Serialize, Deserialize)]
 struct Metadata {
     media_key: String,
-    started_at: i64,
-    ended_at: String,
     title: String,
 }
 
