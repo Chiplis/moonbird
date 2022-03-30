@@ -5,6 +5,7 @@ use std::time::Duration;
 use again::RetryPolicy;
 use clap::Parser;
 use futures::{StreamExt};
+use reqwest::Client;
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use tokio::fs::{File, remove_file, write};
@@ -18,7 +19,7 @@ async fn main() {
 
     let bearer = &format!("Bearer {}", args.bearer);
 
-    let name = &args.path.or_else(|| {
+    let name = &args.file.or_else(|| {
         println!("No name specified, will create audio file with default space name");
         None
     });
@@ -139,11 +140,12 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     let mut index = 1;
 
     let count = AtomicUsize::new(0);
+    let client = reqwest::Client::new();
     let chunks = chunks
         .iter()
         .map(|chunk| format!("{}{}", base_uri[0], chunk))
         .map(|chunk_url| {
-            let f = fetch_url(&space_name, size, index, chunk_url, &count);
+            let f = fetch_url(&space_name, size, index, chunk_url, &count, &client);
             index += 1;
             f
         });
@@ -161,12 +163,12 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     write(name, bytes.as_slice()).await.unwrap();
 }
 
-async fn fetch_url(space_name: &String, size: usize, index: i32, url: String, count: &AtomicUsize) {
+async fn fetch_url(space_name: &String, size: usize, index: i32, url: String, count: &AtomicUsize, client: &Client) {
     let policy = RetryPolicy::exponential(Duration::from_secs(1))
         .with_max_retries(5)
         .with_jitter(true);
 
-    let response = policy.retry(|| reqwest::get(&url))
+    let response = policy.retry(|| client.get(&url).send())
         .await
         .unwrap_or_else(|e| panic!("Error while downloading chunk #{}:\n{}", index, e));
 
@@ -203,10 +205,10 @@ struct Args {
 
     /// Name for the generated audio file
     #[clap(short, long)]
-    path: Option<String>,
+    file: Option<String>,
 
     /// Maximum allowed amount of concurrent fragment requests while downloading space
-    #[clap(short, long, default_value_t = 25)]
+    #[clap(short, long, default_value_t = 50)]
     concurrency: usize,
 
     /// Authentication token to get required metadata
