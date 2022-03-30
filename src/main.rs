@@ -1,16 +1,14 @@
 extern crate core;
 
-use std::fs::File;
-use std::io::{Cursor, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use again::RetryPolicy;
-use bytes::Bytes;
 use clap::Parser;
 use futures::{StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
+use tokio::fs::{File, remove_file, write};
+use tokio::io::AsyncReadExt;
 
 #[tokio::main]
 async fn main() {
@@ -155,15 +153,12 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     let bytes = &mut vec![];
     for i in 1..index {
         let path = format!("{}_{}", &space_name, i);
-        File::open(&path).unwrap().read_to_end(bytes).unwrap();
-        fs::remove_file(&path).await.unwrap();
+        File::open(&path).await.unwrap().read_to_end(bytes).await.unwrap();
+        remove_file(&path).await.unwrap();
     }
 
     let name = name.clone().unwrap_or(space_name.clone()) + ".aac";
-    let mut file = std::fs::File::create(name).unwrap();
-    let bytes = Bytes::from(bytes.to_vec());
-    let mut content = Cursor::new(bytes);
-    std::io::copy(&mut content, &mut file).unwrap();
+    write(name, bytes.as_slice()).await.unwrap();
 }
 
 async fn fetch_url(space_name: &String, size: usize, index: i32, url: String, count: &AtomicUsize) {
@@ -177,7 +172,7 @@ async fn fetch_url(space_name: &String, size: usize, index: i32, url: String, co
 
     let bytes = response.bytes().await.unwrap();
 
-    File::create(format!("{}_{}", space_name, index)).unwrap().write_all(bytes.to_vec().as_slice()).unwrap();
+    write(format!("{}_{}", space_name, index), bytes.to_vec().as_slice()).await.unwrap();
     count.fetch_add(1, Ordering::SeqCst);
     println!("Chunk #{} Downloaded - {} Remaining", index, size - count.load(Ordering::SeqCst));
 }
