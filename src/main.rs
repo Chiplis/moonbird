@@ -1,4 +1,7 @@
-use std::io::{Cursor};
+extern crate core;
+
+use std::fs::File;
+use std::io::{Cursor, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use again::RetryPolicy;
@@ -7,6 +10,7 @@ use clap::Parser;
 use futures::{StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
+use tokio::fs;
 
 #[tokio::main]
 async fn main() {
@@ -115,7 +119,7 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
 
     let location = stream.source.location.as_str();
     let base_uri: Vec<String> = location.split("playlist").map(str::to_string).collect();
-    let space_name: String = space
+    let space_name: &String = &space
         .name()
         .chars()
         .filter(|c| c.is_alphanumeric() || c.is_whitespace())
@@ -130,34 +134,39 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
         .await
         .split("\n")
         .filter(|c| !c.contains("#"))
-        .map(str::to_string).collect();
+        .map(str::to_string)
+        .collect();
     let size = chunks.len();
 
     let mut index = 1;
-    let mut fragments = vec![vec![]; size].into_iter();
-    let mut fragment_chunks = fragments.as_mut_slice().chunks_exact_mut(1);
 
     let count = AtomicUsize::new(0);
     let chunks = chunks
         .iter()
         .map(|chunk| format!("{}{}", base_uri[0], chunk))
         .map(|chunk_url| {
-            let fragment = &mut fragment_chunks.nth(0).unwrap()[0];
-            let f = fetch_url(size, fragment, index, chunk_url, &count);
+            let f = fetch_url(&space_name, size, index, chunk_url, &count);
             index += 1;
             f
         });
 
     futures::stream::iter(chunks).buffer_unordered(concurrency).collect::<()>().await;
 
-    let name = name.clone().unwrap_or(space_name) + ".aac";
+    let bytes = &mut vec![];
+    for i in 1..index {
+        let path = format!("{}_{}", &space_name, i);
+        File::open(&path).unwrap().read_to_end(bytes).unwrap();
+        fs::remove_file(&path).await.unwrap();
+    }
+
+    let name = name.clone().unwrap_or(space_name.clone()) + ".aac";
     let mut file = std::fs::File::create(name).unwrap();
-    let bytes = Bytes::from(fragments.flatten().collect::<Vec<u8>>());
+    let bytes = Bytes::from(bytes.to_vec());
     let mut content = Cursor::new(bytes);
     std::io::copy(&mut content, &mut file).unwrap();
 }
 
-async fn fetch_url(size: usize, data: &mut Vec<u8>, index: i32, url: String, count: &AtomicUsize) {
+async fn fetch_url(space_name: &String, size: usize, index: i32, url: String, count: &AtomicUsize) {
     let policy = RetryPolicy::exponential(Duration::from_secs(1))
         .with_max_retries(5)
         .with_jitter(true);
@@ -167,7 +176,8 @@ async fn fetch_url(size: usize, data: &mut Vec<u8>, index: i32, url: String, cou
         .unwrap_or_else(|e| panic!("Error while downloading chunk #{}:\n{}", index, e));
 
     let bytes = response.bytes().await.unwrap();
-    data.append(&mut bytes.to_vec());
+
+    File::create(format!("{}_{}", space_name, index)).unwrap().write_all(bytes.to_vec().as_slice()).unwrap();
     count.fetch_add(1, Ordering::SeqCst);
     println!("Chunk #{} Downloaded - {} Remaining", index, size - count.load(Ordering::SeqCst));
 }
