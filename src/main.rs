@@ -1,5 +1,7 @@
 extern crate core;
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use again::RetryPolicy;
@@ -153,14 +155,17 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     futures::stream::iter(chunks).buffer_unordered(concurrency).collect::<()>().await;
 
     let bytes = &mut vec![];
+    let name = name.clone().unwrap_or(space_name.clone()) + ".aac";
+    remove_file(&name).await.unwrap_or_else(|_| ());
+    write(&name, []).await.unwrap();
+    let mut space_file = OpenOptions::new().append(true).open(&name).unwrap();
     for i in 1..index {
         let path = format!("{}_{}", &space_name, i);
         File::open(&path).await.unwrap().read_to_end(bytes).await.unwrap();
+        space_file.write(bytes.as_slice()).unwrap();
         remove_file(&path).await.unwrap();
+        bytes.clear();
     }
-
-    let name = name.clone().unwrap_or(space_name.clone()) + ".aac";
-    write(name, bytes.as_slice()).await.unwrap();
 }
 
 async fn fetch_url(space_name: &String, size: usize, index: i32, url: String, count: &AtomicUsize, client: &Client) {
