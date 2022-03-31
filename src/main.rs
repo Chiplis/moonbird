@@ -7,6 +7,7 @@ use std::time::Duration;
 use again::RetryPolicy;
 use clap::Parser;
 use futures::{StreamExt};
+use futures::stream::iter;
 use reqwest::Client;
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
@@ -28,7 +29,7 @@ async fn main() {
 
     let concurrency = args.concurrency;
 
-    download(id, name, true, bearer, concurrency).await;
+    download(id, name, bearer, concurrency).await;
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,13 +56,13 @@ impl Guest {
 
 impl Space {
     async fn new(guest: &Guest, bearer: &String, id: &String) -> Space {
-        let id: &String = &id
-            .split("https://twitter.com/i/spaces/")
-            .map(str::to_string)
-            .collect::<String>()
+        let id = id
+            .replace("https://", "")
+            .replace("twitter.com/i/spaces/", "")
+            .replace("/", "")
             .split("?")
-            .map(str::to_string)
-            .collect::<Vec<String>>()[0];
+            .collect::<Vec<&str>>()[0]
+            .to_string();
 
         let address = format!(
             "https://twitter.com/i/api/graphql/Uv5R_-Chxbn1FEkyUkSW2w/AudioSpaceById?variables=%7B%22id%22%3A%22{}%22%2C%22isMetatagsQuery%22%3Afalse%2C%22withBirdwatchPivots%22%3Afalse%2C%22withDownvotePerspective%22%3Afalse%2C%22withReactionsMetadata%22%3Afalse%2C%22withReactionsPerspective%22%3Afalse%2C%22withReplays%22%3Afalse%2C%22withScheduledSpaces%22%3Afalse%2C%22withSuperFollowsTweetFields%22%3Afalse%2C%22withSuperFollowsUserFields%22%3Afalse%7D",
@@ -112,8 +113,7 @@ impl Space {
     }
 }
 
-async fn download(id: &String, name: &Option<String>, info: bool, bearer: &String, concurrency: usize) {
-
+async fn download(id: &String, name: &Option<String>, bearer: &String, concurrency: usize) {
     let guest = &Guest::new(bearer).await;
     let space = Space::new(guest, bearer, id).await;
     let stream = space.stream(&guest, bearer).await;
@@ -123,12 +123,10 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
     let space_name: &String = &space
         .name()
         .chars()
-        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || "—-_".contains(&c.to_string()))
         .collect();
 
-    if info {
-        println!("Admins: {}\nTitle: {}\nLocation: {}", space.admins(), space_name, location);
-    }
+    println!("Admins: {}\nTitle: {}\nLocation: {}", space.admins(), space_name, location);
 
     let chunks: Vec<String> = stream
         .chunks(guest, bearer)
@@ -139,32 +137,35 @@ async fn download(id: &String, name: &Option<String>, info: bool, bearer: &Strin
         .collect();
     let size = chunks.len();
 
-    let mut index = 1;
 
     let count = AtomicUsize::new(0);
     let client = reqwest::Client::new();
+    let mut index = 0;
+
     let chunks = chunks
         .iter()
         .map(|chunk| format!("{}{}", base_uri[0], chunk))
         .map(|chunk_url| {
-            let f = fetch_url(&space_name, size, index, chunk_url, &count, &client);
             index += 1;
+            let f = fetch_url(&space_name, size, index, chunk_url, &count, &client);
             f
         });
 
-    futures::stream::iter(chunks).buffer_unordered(concurrency).collect::<()>().await;
+    iter(chunks).buffer_unordered(concurrency).collect::<()>().await;
 
-    let bytes = &mut vec![];
     let name = name.clone().unwrap_or(space_name.clone()) + ".aac";
+
     remove_file(&name).await.unwrap_or_else(|_| ());
-    write(&name, []).await.unwrap();
+    File::create(&name).await.unwrap();
+
     let mut space_file = OpenOptions::new().append(true).open(&name).unwrap();
+
     for i in 1..index {
+        let bytes = &mut vec![];
         let path = format!("{}_{}", &space_name, i);
         File::open(&path).await.unwrap().read_to_end(bytes).await.unwrap();
         space_file.write(bytes.as_slice()).unwrap();
         remove_file(&path).await.unwrap();
-        bytes.clear();
     }
 }
 
@@ -187,8 +188,8 @@ async fn fetch_url(space_name: &String, size: usize, index: i32, url: String, co
 
 impl Stream {
     async fn chunks(&self, guest: &Guest, bearer: &String) -> String {
-        let client = reqwest::Client::new();
-        let s = client.get(&self.source.location)
+        reqwest::Client::new()
+            .get(&self.source.location)
             .header(AUTHORIZATION, bearer)
             .header("X-Guest-Token", guest.guest_token.clone())
             .send()
@@ -196,8 +197,7 @@ impl Stream {
             .unwrap()
             .text()
             .await
-            .unwrap();
-        s
+            .unwrap()
     }
 }
 
