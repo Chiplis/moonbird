@@ -74,7 +74,7 @@ impl Space {
         let res = client
             .get(address.to_string())
             .header(AUTHORIZATION, bearer)
-            .header("X-Guest-Token", guest.guest_token.clone())
+            .header("X-Guest-Token", &guest.guest_token)
             .send()
             .await
             .unwrap();
@@ -102,7 +102,7 @@ impl Space {
         client
             .get(address)
             .header(AUTHORIZATION, bearer)
-            .header("X-Guest-Token", guest.guest_token.clone())
+            .header("X-Guest-Token", &guest.guest_token)
             .send()
             .await
             .unwrap()
@@ -190,7 +190,7 @@ impl Stream {
         reqwest::Client::new()
             .get(&self.source.location)
             .header(AUTHORIZATION, bearer)
-            .header("X-Guest-Token", guest.guest_token.clone())
+            .header("X-Guest-Token", &guest.guest_token)
             .send()
             .await
             .unwrap()
