@@ -1,5 +1,6 @@
 extern crate core;
 
+use std::env::temp_dir;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -161,7 +162,7 @@ async fn download(id: &String, name: &Option<String>, bearer: &String, concurren
 
     for i in 1..index {
         let bytes = &mut vec![];
-        let path = format!("{}_{}", &space_name, i);
+        let path = format!("{}/{}_{}", temp_dir().to_str().unwrap(), &space_name, i);
         File::open(&path).await.unwrap().read_to_end(bytes).await.unwrap();
         space_file.write(bytes.as_slice()).unwrap();
         remove_file(&path).await.unwrap();
@@ -179,7 +180,7 @@ async fn fetch_url(space_name: &String, size: usize, index: i32, url: String, co
 
     let bytes = response.bytes().await.unwrap();
 
-    write(format!("{}_{}", space_name, index), bytes.to_vec().as_slice()).await.unwrap();
+    write(format!("{}/{}_{}", temp_dir().to_str().unwrap(), space_name, index), bytes.to_vec().as_slice()).await.unwrap();
     count.fetch_add(1, Ordering::SeqCst);
     println!("Chunk #{} Downloaded - {} Remaining", index, size - count.load(Ordering::SeqCst));
 }
