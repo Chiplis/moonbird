@@ -57,12 +57,11 @@ impl Guest {
 impl Space {
     async fn new(guest: &Guest, bearer: &String, id: &String) -> Space {
         let id = id
-            .replace("https://", "")
-            .replace("twitter.com/i/spaces/", "")
-            .replace("/", "")
             .split("?")
             .collect::<Vec<&str>>()[0]
-            .to_string();
+            .replace("https://", "")
+            .replace("twitter.com/i/spaces/", "")
+            .replace("/", "");
 
         let address = format!(
             "https://twitter.com/i/api/graphql/Uv5R_-Chxbn1FEkyUkSW2w/AudioSpaceById?variables=%7B%22id%22%3A%22{}%22%2C%22isMetatagsQuery%22%3Afalse%2C%22withBirdwatchPivots%22%3Afalse%2C%22withDownvotePerspective%22%3Afalse%2C%22withReactionsMetadata%22%3Afalse%2C%22withReactionsPerspective%22%3Afalse%2C%22withReplays%22%3Afalse%2C%22withScheduledSpaces%22%3Afalse%2C%22withSuperFollowsTweetFields%22%3Afalse%2C%22withSuperFollowsUserFields%22%3Afalse%7D",
@@ -140,14 +139,14 @@ async fn download(id: &String, name: &Option<String>, bearer: &String, concurren
 
     let count = AtomicUsize::new(0);
     let client = reqwest::Client::new();
-    let mut index = 0;
+    let mut index = 1;
 
     let chunks = chunks
         .iter()
         .map(|chunk| format!("{}{}", base_uri[0], chunk))
         .map(|chunk_url| {
-            index += 1;
             let f = fetch_url(&space_name, size, index, chunk_url, &count, &client);
+            index += 1;
             f
         });
 
