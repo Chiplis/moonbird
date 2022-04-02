@@ -9,6 +9,7 @@ use std::{
   sync::atomic::{AtomicUsize, Ordering},
   time::Duration
 };
+use std::env::temp_dir;
 use reqwest::header::AUTHORIZATION;
 use tokio::{
   fs::{File, remove_file, write, read},
@@ -144,7 +145,7 @@ impl<'a> Space<'a> {
 
     let mut space_file = OpenOptions::new().append(true).open(&filename)?;
 
-    for path in stream.fetch_chunks(concurrency).await? {
+    for path in stream.fetch_fragments(concurrency).await? {
       space_file.write_all(&read(&path).await?)?;
       remove_file(&path).await?;
     }
@@ -158,6 +159,7 @@ impl<'a> Space<'a> {
 }
 
 struct Stream<'a> {
+  fragment_dir: String,
   space: &'a Space<'a>,
   attrs: StreamAttrs,
 }
@@ -169,36 +171,43 @@ impl<'a> Stream<'a> {
       &space.attrs.data.audio_space.metadata.media_key
     );
     let attrs = space.guest.get(&address).await?.json::<StreamAttrs>().await?;
-
-    Ok(Self{ attrs, space })
+    let fragment_dir = temp_dir()
+        .to_str()
+        .ok_or_else(|| anyhow!("Could not get temporary directory"))?
+        .to_string();
+    Ok(Self{ attrs, space, fragment_dir })
   }
 
-  pub async fn fetch_chunks(&self, concurrency: usize) -> Result<Vec<String>> {
+  pub async fn fetch_fragments(&self, concurrency: usize) -> Result<Vec<String>> {
     let base_uri = self.location().split("playlist").next()
       .ok_or_else(|| anyhow!("Could not parse base_uri from location"))?;
     let count = AtomicUsize::new(0);
-
-    let chunks = self.chunks().await?;
-    let size = chunks.len();
-
-    let futures = chunks.into_iter().enumerate().map(|(index, chunk_name)| {
-      let client = reqwest::Client::new();
-      let url = format!("{}{}", base_uri, chunk_name);
-      let filename = format!("{}_{}", self.space.name, index);
-      let policy = RetryPolicy::exponential(Duration::from_secs(1))
+    let client = reqwest::Client::new();
+    let fragments = self.fragments().await?;
+    let size = fragments.len();
+    let policy = RetryPolicy::exponential(Duration::from_secs(1))
         .with_max_retries(5)
         .with_jitter(true);
-      let count_ref = &count;
+
+    println!("Fragments: {}", size);
+
+    let futures = fragments.into_iter().enumerate().map(|(index, fragment_name)| {
+
+      let url = format!("{}{}", base_uri, fragment_name);
+      let filename = format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
+
+      let count = &count;
+      let client = &client;
+      let policy = &policy;
 
       async move {
         let bytes = policy.retry(|| client.get(&url).send() ).await
-          .map_err(|e| anyhow!("Error while downloading chunk #{}:\n{}", index, e))?
+          .map_err(|e| anyhow!("Error while downloading fragment #{}:\n{}", index, e))?
           .bytes().await?;
 
         write(&filename, bytes).await?;
-        count_ref.fetch_add(1, Ordering::SeqCst);
 
-        print!("\rChunk {:>8}/{:<8}", index, size);
+        print!(" fragments remaining \r{}", size - count.fetch_add(1, Ordering::SeqCst) - 1);
 
         Ok(filename)
       }
@@ -209,7 +218,7 @@ impl<'a> Stream<'a> {
       .into_iter().collect()
   }
 
-  async fn chunks(&self) -> Result<Vec<String>> {
+  async fn fragments(&self) -> Result<Vec<String>> {
     Ok(self.space.guest.get(self.location()).await?
       .text().await?
       .split('\n')
