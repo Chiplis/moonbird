@@ -5,14 +5,12 @@ use futures::{stream::iter, StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use std::env::temp_dir;
-use std::time::Instant;
+use std::time::{Duration};
 use std::{
-    fs::OpenOptions,
-    io::Write,
     sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
 };
-use tokio::fs::{read, remove_file, write, File};
+use tokio::fs::{read, remove_file, write, File, OpenOptions};
+use tokio::io::AsyncWriteExt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -168,18 +166,19 @@ impl<'a> Space<'a> {
         let _ = remove_file(&filename).await;
         File::create(&filename).await?;
 
-        let mut space_file = OpenOptions::new().append(true).open(&filename)?;
+        let mut fragment_files = stream.fetch_fragments(concurrency).await?;
+        let get_index = |s: &String| -> usize {
+            s.split("_").collect::<Vec<&str>>().last().unwrap().parse().unwrap()
+        };
+        fragment_files.sort_by(|a, b| {
+            get_index(a).cmp(&get_index(b))
+        });
 
-        let fragment_files = stream.fetch_fragments(concurrency).await?;
-        let i = Instant::now();
+        let mut space_file = OpenOptions::new().append(true).open(&filename).await?;
         for file in fragment_files {
-            space_file.write_all(&read(&file).await?)?;
+            space_file.write_all(&read(&file).await?).await?;
             remove_file(&file).await?;
         }
-        println!(
-            "\n{} milliseconds merging/deleting files",
-            i.elapsed().as_millis()
-        );
 
         Ok(())
     }
