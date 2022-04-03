@@ -1,11 +1,11 @@
 use again::RetryPolicy;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use futures::{stream::iter, StreamExt};
+use futures::{future, stream::iter, StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use std::env::temp_dir;
-use std::fs::{read, File, OpenOptions, create_dir, remove_dir_all};
+use std::fs::{create_dir, read, remove_dir_all, File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -82,7 +82,11 @@ impl Guest {
             .ok_or_else(|| anyhow!("No guest_token attribute found"))?
             .to_string();
 
-        println!("Guest fetched in {}ms:\n{:?}", start.elapsed().as_millis(), guest_token);
+        println!(
+            "Guest fetched in {}ms:\n{:?}",
+            start.elapsed().as_millis(),
+            guest_token
+        );
         Ok(Self {
             bearer_token,
             guest_token,
@@ -203,7 +207,8 @@ impl<'a> Stream<'a> {
         let fragment_dir = temp_dir()
             .to_str()
             .ok_or_else(|| anyhow!("Could not get temporary directory"))?
-            .to_string() + "/moonbird";
+            .to_string()
+            + "/moonbird";
 
         if !Path::new(&fragment_dir).exists() {
             create_dir(&fragment_dir)?;
@@ -218,11 +223,7 @@ impl<'a> Stream<'a> {
         })
     }
 
-    pub async fn download_fragments(
-        &self,
-        concurrency: usize,
-        mut file: File,
-    ) -> Result<Vec<String>> {
+    pub async fn download_fragments(&self, concurrency: usize, mut file: File) -> Result<()> {
         let base_uri = self
             .location()
             .split("playlist")
@@ -268,28 +269,28 @@ impl<'a> Stream<'a> {
                         size - count.fetch_add(1, Ordering::SeqCst) - 1
                     );
 
-                    Ok(filename)
+                    Ok(())
                 }
             });
 
         let mut index = 1;
-        let files = iter(futures)
+        iter(futures)
             .buffer_unordered(concurrency)
-            .map(|f| {
+            .for_each(|_: Result<()>| {
                 let mut filename = format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
                 while Path::new(&filename).exists() {
-                    file.write_all(&read(&filename)?.as_slice())?;
+                    file.write_all(&read(&filename).expect("Error reading fragment").as_slice())
+                        .expect("Error writing fragment to final file");
                     index += 1;
                     filename = format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
                 }
-                f
+                future::ready(())
             })
-            .collect::<Vec<Result<String>>>()
-            .await
-            .into_iter()
-            .collect();
+            .await;
+
         remove_dir_all(&self.fragment_dir)?;
-        files
+
+        Ok(())
     }
 
     async fn fragments(&self) -> Result<Vec<String>> {
