@@ -274,9 +274,16 @@ impl<'a> Stream<'a> {
             });
 
         let mut index = 1;
+        let merge_freq = size / 5;
+
         iter(futures)
             .buffer_unordered(concurrency)
-            .for_each(|_: Result<()>| {
+            .enumerate()
+            .filter(|(i, _)| future::ready(*i != 0 && i % merge_freq == 0 || i > &(size - concurrency)))
+            .for_each(|(i, _): (usize, Result<()>)| {
+                if i > size - concurrency && i + 1 != size {
+                    return future::ready(());
+                }
                 loop {
                     let fragment_file =
                         format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
