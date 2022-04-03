@@ -223,7 +223,7 @@ impl<'a> Stream<'a> {
         })
     }
 
-    pub async fn download_fragments(&self, concurrency: usize, mut file: File) -> Result<()> {
+    pub async fn download_fragments(&self, concurrency: usize, mut final_file: File) -> Result<()> {
         let base_uri = self
             .location()
             .split("playlist")
@@ -277,12 +277,22 @@ impl<'a> Stream<'a> {
         iter(futures)
             .buffer_unordered(concurrency)
             .for_each(|_: Result<()>| {
-                let mut filename = format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
-                while Path::new(&filename).exists() {
-                    file.write_all(&read(&filename).expect("Error reading fragment").as_slice())
-                        .expect("Error writing fragment to final file");
+                loop {
+                    let fragment_file =
+                        format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
+
+                    if !Path::new(&fragment_file).exists() {
+                        break;
+                    }
+
+                    let bytes = read(&fragment_file)
+                        .expect(format!("Error reading fragment #{}", index).as_str());
+
+                    final_file.write_all(bytes.as_slice()).expect(
+                        format!("Error writing fragment #{} to final file", index).as_str(),
+                    );
+
                     index += 1;
-                    filename = format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
                 }
                 future::ready(())
             })
