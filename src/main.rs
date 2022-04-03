@@ -5,12 +5,13 @@ use futures::{stream::iter, StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use std::env::temp_dir;
-use std::time::{Duration};
-use std::{
-    sync::atomic::{AtomicUsize, Ordering},
-};
-use tokio::fs::{read, remove_file, write, File, OpenOptions};
-use tokio::io::AsyncWriteExt;
+use std::fs::{read, File, OpenOptions, create_dir, remove_dir_all};
+use std::io::Write;
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+use tokio::fs::write;
+use tokio::time::Instant;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -63,6 +64,7 @@ struct Guest {
 
 impl Guest {
     async fn new(bearer: &str) -> Result<Guest> {
+        let start = Instant::now();
         let client = reqwest::Client::new();
         let bearer_token = format!("Bearer {}", bearer);
 
@@ -74,13 +76,13 @@ impl Guest {
             .with_context(|| "Error fetching guest token".to_string())?
             .json::<serde_json::Value>()
             .await
-            .with_context(|| "Guest token responsa was not json".to_string())?
+            .with_context(|| "Guest token response was not json".to_string())?
             .get("guest_token")
             .and_then(|f| f.as_str())
             .ok_or_else(|| anyhow!("No guest_token attribute found"))?
             .to_string();
 
-        println!("Guest:\n{:?}", guest_token);
+        println!("Guest fetched in {}ms:\n{:?}", start.elapsed().as_millis(), guest_token);
         Ok(Self {
             bearer_token,
             guest_token,
@@ -110,6 +112,7 @@ struct Space<'a> {
 
 impl<'a> Space<'a> {
     async fn new(guest: &'a Guest, id: &str) -> Result<Space<'a>> {
+        let start = Instant::now();
         let id = id.split('?').collect::<Vec<&str>>()[0]
             .replace("https://", "")
             .replace("twitter.com/i/spaces/", "")
@@ -119,8 +122,6 @@ impl<'a> Space<'a> {
             "https://twitter.com/i/api/graphql/Uv5R_-Chxbn1FEkyUkSW2w/AudioSpaceById?variables=%7B%22id%22%3A%22{}%22%2C%22isMetatagsQuery%22%3Afalse%2C%22withBirdwatchPivots%22%3Afalse%2C%22withDownvotePerspective%22%3Afalse%2C%22withReactionsMetadata%22%3Afalse%2C%22withReactionsPerspective%22%3Afalse%2C%22withReplays%22%3Afalse%2C%22withScheduledSpaces%22%3Afalse%2C%22withSuperFollowsTweetFields%22%3Afalse%2C%22withSuperFollowsUserFields%22%3Afalse%7D",
             id
         );
-
-        println!("{}", address);
 
         let res = guest.get(&address).await?;
 
@@ -144,6 +145,8 @@ impl<'a> Space<'a> {
             .map(|admin| format!("{}{}", admin.display_name, ","))
             .collect();
 
+        println!("Space info fetched in {}ms", start.elapsed().as_millis());
+
         Ok(Self {
             guest,
             attrs,
@@ -154,7 +157,7 @@ impl<'a> Space<'a> {
 
     async fn download(&self, name: Option<String>, concurrency: usize) -> Result<()> {
         let stream = self.stream().await?;
-
+        let start = Instant::now();
         println!(
             "Admins: {}\nTitle: {}\nLocation: {}",
             self.admins,
@@ -162,23 +165,12 @@ impl<'a> Space<'a> {
             stream.location()
         );
 
-        let filename = format!("{}.aac", name.as_ref().unwrap_or(&self.name));
-        let _ = remove_file(&filename).await;
-        File::create(&filename).await?;
+        let final_file = format!("{}.aac", name.as_ref().unwrap_or(&self.name));
+        File::create(&final_file)?;
+        let file = OpenOptions::new().append(true).open(&final_file)?;
+        stream.download_fragments(concurrency, file).await?;
 
-        let mut fragment_files = stream.fetch_fragments(concurrency).await?;
-        let get_index = |s: &String| -> usize {
-            s.split("_").collect::<Vec<&str>>().last().unwrap().parse().unwrap()
-        };
-        fragment_files.sort_by(|a, b| {
-            get_index(a).cmp(&get_index(b))
-        });
-
-        let mut space_file = OpenOptions::new().append(true).open(&filename).await?;
-        for file in fragment_files {
-            space_file.write_all(&read(&file).await?).await?;
-            remove_file(&file).await?;
-        }
+        println!("\nSpace downloaded in {}ms", start.elapsed().as_millis());
 
         Ok(())
     }
@@ -196,6 +188,7 @@ struct Stream<'a> {
 
 impl<'a> Stream<'a> {
     pub async fn new(space: &'a Space<'a>) -> Result<Stream<'a>> {
+        let start = Instant::now();
         let address = format!(
             "https://twitter.com/i/api/1.1/live_video_stream/status/{}",
             &space.attrs.data.audio_space.metadata.media_key
@@ -206,10 +199,18 @@ impl<'a> Stream<'a> {
             .await?
             .json::<StreamAttrs>()
             .await?;
+
         let fragment_dir = temp_dir()
             .to_str()
             .ok_or_else(|| anyhow!("Could not get temporary directory"))?
-            .to_string();
+            .to_string() + "/moonbird";
+
+        if !Path::new(&fragment_dir).exists() {
+            create_dir(&fragment_dir)?;
+        }
+
+        println!("Stream fetched in {}ms", start.elapsed().as_millis());
+
         Ok(Self {
             attrs,
             space,
@@ -217,7 +218,11 @@ impl<'a> Stream<'a> {
         })
     }
 
-    pub async fn fetch_fragments(&self, concurrency: usize) -> Result<Vec<String>> {
+    pub async fn download_fragments(
+        &self,
+        concurrency: usize,
+        mut file: File,
+    ) -> Result<Vec<String>> {
         let base_uri = self
             .location()
             .split("playlist")
@@ -267,12 +272,24 @@ impl<'a> Stream<'a> {
                 }
             });
 
-        iter(futures)
+        let mut index = 1;
+        let files = iter(futures)
             .buffer_unordered(concurrency)
+            .map(|f| {
+                let mut filename = format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
+                while Path::new(&filename).exists() {
+                    file.write_all(&read(&filename)?.as_slice())?;
+                    index += 1;
+                    filename = format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
+                }
+                f
+            })
             .collect::<Vec<Result<String>>>()
             .await
             .into_iter()
-            .collect()
+            .collect();
+        remove_dir_all(&self.fragment_dir)?;
+        files
     }
 
     async fn fragments(&self) -> Result<Vec<String>> {
