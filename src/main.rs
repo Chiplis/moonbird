@@ -279,7 +279,8 @@ impl<'a> Stream<'a> {
         iter(futures)
             .buffer_unordered(concurrency)
             .enumerate()
-            .filter(|(i, _)| future::ready(*i != 0 && i % merge_freq == 0 || i + 1 == size))
+            .skip(size / 2)
+            .filter(|(i, _)| future::ready(i % merge_freq == 0 || i + 1 == size))
             .for_each(|_: (usize, Result<()>)| {
                 loop {
                     let fragment_file =
