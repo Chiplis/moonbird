@@ -277,7 +277,7 @@ impl<'a> Stream<'a> {
             .enumerate()
             .skip(size / 2)
             .filter(|(i, _)| future::ready(i % merge_freq == 0 || i + 1 == size))
-            .for_each(|_: (usize, Result<()>)| {
+            .for_each_concurrent(None, |_: (usize, Result<()>)| {
                 loop {
                     let fragment_file =
                         format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
@@ -286,12 +286,13 @@ impl<'a> Stream<'a> {
                         break;
                     }
 
-                    let bytes = read(&fragment_file)
-                        .expect(format!("Error reading fragment #{}", index).as_str());
-
-                    final_file.write_all(bytes.as_slice()).expect(
-                        format!("Error writing fragment #{} to final file", index).as_str(),
-                    );
+                    read(&fragment_file)
+                        .map(|b| {
+                            final_file
+                                .write_all(b.as_slice())
+                                .expect(&format!("Error writing fragment #{}", index))
+                        })
+                        .expect(&format!("Error reading fragment #{}", index));
 
                     index += 1;
                 }
