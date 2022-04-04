@@ -230,12 +230,12 @@ impl<'a> Stream<'a> {
             .next()
             .ok_or_else(|| anyhow!("Could not parse base_uri from location"))?;
 
-        let count = AtomicUsize::new(0);
-        let client = reqwest::Client::new();
-        let fragments = self.fragments().await?;
+        let count = &AtomicUsize::new(0);
+        let client = &reqwest::Client::new();
+        let fragments = &self.fragments().await?;
 
         let size = fragments.len();
-        let policy = RetryPolicy::exponential(Duration::from_secs(1))
+        let policy = &RetryPolicy::exponential(Duration::from_secs(1))
             .with_max_retries(5)
             .with_jitter(true);
 
@@ -247,10 +247,6 @@ impl<'a> Stream<'a> {
             .map(|(index, fragment_name)| {
                 let url = format!("{}{}", base_uri, fragment_name);
                 let filename = format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
-
-                let count = &count;
-                let client = &client;
-                let policy = &policy;
 
                 async move {
                     let bytes = policy
