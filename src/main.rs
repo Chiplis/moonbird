@@ -68,7 +68,7 @@ impl Guest {
     async fn new(bearer: &str) -> Result<Guest> {
         let start = Instant::now();
         let client = reqwest::Client::new();
-        let bearer_token = format!("Bearer {}", bearer);
+        let bearer_token = format!("Bearer {bearer}");
 
         let guest_token = client
             .post("https://api.twitter.com/1.1/guest/activate.json")
@@ -85,9 +85,8 @@ impl Guest {
             .to_string();
 
         println!(
-            "Guest fetched in {}ms:\n{:?}",
-            start.elapsed().as_millis(),
-            guest_token
+            "Guest fetched in {}ms:\n{guest_token}",
+            start.elapsed().as_millis()
         );
         Ok(Self {
             bearer_token,
@@ -125,8 +124,7 @@ impl<'a> Space<'a> {
             .replace("/", "");
 
         let address = format!(
-            "https://twitter.com/i/api/graphql/Uv5R_-Chxbn1FEkyUkSW2w/AudioSpaceById?variables=%7B%22id%22%3A%22{}%22%2C%22isMetatagsQuery%22%3Afalse%2C%22withBirdwatchPivots%22%3Afalse%2C%22withDownvotePerspective%22%3Afalse%2C%22withReactionsMetadata%22%3Afalse%2C%22withReactionsPerspective%22%3Afalse%2C%22withReplays%22%3Afalse%2C%22withScheduledSpaces%22%3Afalse%2C%22withSuperFollowsTweetFields%22%3Afalse%2C%22withSuperFollowsUserFields%22%3Afalse%7D",
-            id
+            "https://twitter.com/i/api/graphql/Uv5R_-Chxbn1FEkyUkSW2w/AudioSpaceById?variables=%7B%22id%22%3A%22{id}%22%2C%22isMetatagsQuery%22%3Afalse%2C%22withBirdwatchPivots%22%3Afalse%2C%22withDownvotePerspective%22%3Afalse%2C%22withReactionsMetadata%22%3Afalse%2C%22withReactionsPerspective%22%3Afalse%2C%22withReplays%22%3Afalse%2C%22withScheduledSpaces%22%3Afalse%2C%22withSuperFollowsTweetFields%22%3Afalse%2C%22withSuperFollowsUserFields%22%3Afalse%7D",
         );
 
         let res = guest.get(&address).await?;
@@ -242,13 +240,13 @@ impl<'a> Stream<'a> {
             .with_jitter(true);
         let notifications = &(0..size).map(|_| Notify::new()).collect::<Vec<Notify>>();
 
-        println!("Fragments: {}", size);
+        println!("Fragments: {size}");
 
         let futures = fragments
             .into_iter()
             .enumerate()
             .map(|(index, fragment_name)| {
-                let url = format!("{}{}", base_uri, fragment_name);
+                let url = format!("{base_uri}{fragment_name}");
                 let final_file = final_file.clone();
                 async move {
                     let bytes = policy
@@ -276,7 +274,7 @@ impl<'a> Stream<'a> {
                     .await
                     .write_all(bytes.as_slice())
                     .await
-                    .expect(&format!("Error writing fragment #{}", index));
+                    .expect(&format!("Error writing fragment #{index}"));
                 print!(
                     " fragments remaining \r{}",
                     size - index - 1
