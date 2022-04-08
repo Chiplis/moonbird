@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::env::temp_dir;
 use std::fs::{create_dir, remove_dir_all};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::{File, OpenOptions};
@@ -233,7 +232,6 @@ impl<'a> Stream<'a> {
             .next()
             .ok_or_else(|| anyhow!("Could not parse base_uri from location"))?;
 
-        let count = &AtomicUsize::new(0);
         let client = &reqwest::Client::new();
         let fragments = &self.fragments().await?;
         let final_file = Arc::new(Mutex::new(final_file));
@@ -263,10 +261,6 @@ impl<'a> Stream<'a> {
                             "Error while extracting bytes for fragment #{index}"
                         ));
 
-                    print!(
-                        " fragments remaining \r{}",
-                        size - count.fetch_add(1, Ordering::SeqCst) - 1
-                    );
                     (bytes.to_vec(), index, final_file)
                 }
             });
@@ -277,14 +271,16 @@ impl<'a> Stream<'a> {
                 if index != 0 {
                     notifications[index - 1].notified().await
                 }
-
                 final_file
                     .lock()
                     .await
                     .write_all(bytes.as_slice())
                     .await
                     .expect(&format!("Error writing fragment #{}", index));
-
+                print!(
+                    " fragments remaining \r{}",
+                    size - index - 1
+                );
                 notifications[index].notify_one();
             })
             .await;
