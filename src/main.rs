@@ -1,12 +1,13 @@
+use std::ops::{DerefMut};
 use again::RetryPolicy;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use futures::lock::Mutex;
 use futures::{stream::iter, StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use parking_lot::const_mutex;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Notify;
@@ -219,7 +220,7 @@ impl Stream {
 
         let client = &reqwest::Client::new();
         let fragments = &self.fragments().await?;
-        let final_file = Arc::new(Mutex::new(final_file));
+        let final_file = Arc::new(const_mutex(final_file));
 
         let size = fragments.len();
         let policy = &RetryPolicy::exponential(Duration::from_secs(1))
@@ -239,11 +240,11 @@ impl Stream {
                     let bytes = policy
                         .retry(|| client.get(&url).send())
                         .await
-                        .expect(&format!("Error while downloading fragment #{index}"))
+                        .expect(&format!("Error downloading fragment #{index}"))
                         .bytes()
                         .await
                         .expect(&format!(
-                            "Error while extracting bytes for fragment #{index}"
+                            "Error extracting bytes for fragment #{index}"
                         ));
 
                     (bytes.to_vec(), index, final_file)
@@ -258,7 +259,7 @@ impl Stream {
                 }
                 final_file
                     .lock()
-                    .await
+                    .deref_mut()
                     .write_all(bytes.as_slice())
                     .await
                     .expect(&format!("Error writing fragment #{index}"));
