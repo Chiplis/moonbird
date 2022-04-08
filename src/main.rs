@@ -1,4 +1,6 @@
+use std::fs::remove_file;
 use std::ops::{DerefMut};
+use std::path::Path;
 use again::RetryPolicy;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
@@ -167,14 +169,15 @@ impl Space {
             space_name,
             stream.location()
         );
-
+        let file_name = &format!("{}.aac", name.as_ref().unwrap_or(&space_name));
+        if Path::new(file_name).exists() {
+            remove_file(file_name)?;
+        }
         let file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(&format!("{}.aac", name.as_ref().unwrap_or(&space_name)))
+            .open(file_name)
             .await?;
-        file.set_len(0).await?;
-
         let start = Instant::now();
         stream.download_fragments(concurrency, file).await?;
         println!("\nSpace downloaded in {}ms", start.elapsed().as_millis());
