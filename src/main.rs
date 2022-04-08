@@ -5,9 +5,6 @@ use futures::lock::Mutex;
 use futures::{stream::iter, StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
-use std::env::temp_dir;
-use std::fs::{create_dir, remove_dir_all};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::{File, OpenOptions};
@@ -161,7 +158,6 @@ impl<'a> Space<'a> {
 
     async fn download(&self, name: Option<String>, concurrency: usize) -> Result<()> {
         let stream = self.stream().await?;
-        let start = Instant::now();
         println!(
             "Admins: {}\nTitle: {}\nLocation: {}",
             self.admins,
@@ -169,11 +165,15 @@ impl<'a> Space<'a> {
             stream.location()
         );
 
-        let final_file = format!("{}.aac", name.as_ref().unwrap_or(&self.name));
-        File::create(&final_file).await?;
-        let file = OpenOptions::new().append(true).open(&final_file).await?;
-        stream.download_fragments(concurrency, file).await?;
+        let file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&format!("{}.aac", name.as_ref().unwrap_or(&self.name)))
+            .await?;
+        file.set_len(0).await?;
 
+        let start = Instant::now();
+        stream.download_fragments(concurrency, file).await?;
         println!("\nSpace downloaded in {}ms", start.elapsed().as_millis());
 
         Ok(())
@@ -185,7 +185,6 @@ impl<'a> Space<'a> {
 }
 
 struct Stream<'a> {
-    fragment_dir: String,
     space: &'a Space<'a>,
     attrs: StreamAttrs,
 }
@@ -204,23 +203,9 @@ impl<'a> Stream<'a> {
             .json::<StreamAttrs>()
             .await?;
 
-        let fragment_dir = temp_dir()
-            .to_str()
-            .ok_or_else(|| anyhow!("Could not get temporary directory"))?
-            .to_string()
-            + "/moonbird";
-
-        if !Path::new(&fragment_dir).exists() {
-            create_dir(&fragment_dir)?;
-        }
-
         println!("Stream fetched in {}ms", start.elapsed().as_millis());
 
-        Ok(Self {
-            attrs,
-            space,
-            fragment_dir,
-        })
+        Ok(Self { attrs, space })
     }
 
     pub async fn download_fragments(&self, concurrency: usize, final_file: File) -> Result<()> {
@@ -275,15 +260,10 @@ impl<'a> Stream<'a> {
                     .write_all(bytes.as_slice())
                     .await
                     .expect(&format!("Error writing fragment #{index}"));
-                print!(
-                    " fragments remaining \r{}",
-                    size - index - 1
-                );
+                print!(" fragments remaining \r{}", size - index - 1);
                 notifications[index].notify_one();
             })
             .await;
-
-        remove_dir_all(&self.fragment_dir)?;
 
         Ok(())
     }
