@@ -1,16 +1,19 @@
 use again::RetryPolicy;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use futures::{future, stream::iter, StreamExt};
+use futures::lock::Mutex;
+use futures::{stream::iter, StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
 use std::env::temp_dir;
-use std::fs::{create_dir, read, remove_dir_all, File, OpenOptions};
-use std::io::Write;
+use std::fs::{create_dir, remove_dir_all};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::fs::write;
+use tokio::fs::{File, OpenOptions};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Notify;
 use tokio::time::Instant;
 
 #[tokio::main]
@@ -170,8 +173,8 @@ impl<'a> Space<'a> {
         );
 
         let final_file = format!("{}.aac", name.as_ref().unwrap_or(&self.name));
-        File::create(&final_file)?;
-        let file = OpenOptions::new().append(true).open(&final_file)?;
+        File::create(&final_file).await?;
+        let file = OpenOptions::new().append(true).open(&final_file).await?;
         stream.download_fragments(concurrency, file).await?;
 
         println!("\nSpace downloaded in {}ms", start.elapsed().as_millis());
@@ -223,7 +226,7 @@ impl<'a> Stream<'a> {
         })
     }
 
-    pub async fn download_fragments(&self, concurrency: usize, mut final_file: File) -> Result<()> {
+    pub async fn download_fragments(&self, concurrency: usize, final_file: File) -> Result<()> {
         let base_uri = self
             .location()
             .split("playlist")
@@ -233,11 +236,13 @@ impl<'a> Stream<'a> {
         let count = &AtomicUsize::new(0);
         let client = &reqwest::Client::new();
         let fragments = &self.fragments().await?;
+        let final_file = Arc::new(Mutex::new(final_file));
 
         let size = fragments.len();
         let policy = &RetryPolicy::exponential(Duration::from_secs(1))
             .with_max_retries(5)
             .with_jitter(true);
+        let notifications = &(0..size).map(|_| Notify::new()).collect::<Vec<Notify>>();
 
         println!("Fragments: {}", size);
 
@@ -246,57 +251,41 @@ impl<'a> Stream<'a> {
             .enumerate()
             .map(|(index, fragment_name)| {
                 let url = format!("{}{}", base_uri, fragment_name);
-                let filename = format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
-
+                let final_file = final_file.clone();
                 async move {
                     let bytes = policy
                         .retry(|| client.get(&url).send())
                         .await
-                        .map_err(|e| {
-                            anyhow!("Error while downloading fragment #{}:\n{}", index, e)
-                        })?
+                        .expect(&format!("Error while downloading fragment #{index}"))
                         .bytes()
-                        .await?;
-
-                    write(&filename, bytes).await?;
+                        .await
+                        .expect(&format!(
+                            "Error while extracting bytes for fragment #{index}"
+                        ));
 
                     print!(
                         " fragments remaining \r{}",
                         size - count.fetch_add(1, Ordering::SeqCst) - 1
                     );
-
-                    Ok(())
+                    (bytes.to_vec(), index, final_file)
                 }
             });
 
-        let mut index = 1;
-        let merge_freq = size / 5;
-
         iter(futures)
             .buffer_unordered(concurrency)
-            .enumerate()
-            .skip(size / 2)
-            .filter(|(i, _)| future::ready(i % merge_freq == 0 || i + 1 == size))
-            .for_each_concurrent(None, |_: (usize, Result<()>)| {
-                loop {
-                    let fragment_file =
-                        format!("{}/{}_{}", self.fragment_dir, self.space.name, index);
-
-                    if !Path::new(&fragment_file).exists() {
-                        break;
-                    }
-
-                    read(&fragment_file)
-                        .map(|b| {
-                            final_file
-                                .write_all(b.as_slice())
-                                .expect(&format!("Error writing fragment #{}", index))
-                        })
-                        .expect(&format!("Error reading fragment #{}", index));
-
-                    index += 1;
+            .for_each_concurrent(None, |(bytes, index, final_file)| async move {
+                if index != 0 {
+                    notifications[index - 1].notified().await
                 }
-                future::ready(())
+
+                final_file
+                    .lock()
+                    .await
+                    .write_all(bytes.as_slice())
+                    .await
+                    .expect(&format!("Error writing fragment #{}", index));
+
+                notifications[index].notify_one();
             })
             .await;
 
