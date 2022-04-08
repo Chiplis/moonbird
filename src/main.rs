@@ -91,7 +91,7 @@ impl Guest {
         })
     }
 
-    async fn space<'a>(&'a self, id: &str) -> Result<Space<'a>> {
+    async fn space(self, id: &str) -> Result<Space> {
         Space::new(self, id).await
     }
 
@@ -105,15 +105,15 @@ impl Guest {
     }
 }
 
-struct Space<'a> {
-    guest: &'a Guest,
+struct Space {
+    guest: Guest,
     attrs: SpaceAttrs,
     name: String,
     admins: String,
 }
 
-impl<'a> Space<'a> {
-    async fn new(guest: &'a Guest, id: &str) -> Result<Space<'a>> {
+impl Space {
+    async fn new(guest: Guest, id: &str) -> Result<Space> {
         let start = Instant::now();
         let id = id.split('?').collect::<Vec<&str>>()[0]
             .replace("https://", "")
@@ -156,19 +156,21 @@ impl<'a> Space<'a> {
         })
     }
 
-    async fn download(&self, name: Option<String>, concurrency: usize) -> Result<()> {
+    async fn download(self, name: Option<String>, concurrency: usize) -> Result<()> {
+        let space_name = self.name.clone();
+        let admins = self.admins.clone();
         let stream = self.stream().await?;
         println!(
             "Admins: {}\nTitle: {}\nLocation: {}",
-            self.admins,
-            self.name,
+            admins,
+            space_name,
             stream.location()
         );
 
         let file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(&format!("{}.aac", name.as_ref().unwrap_or(&self.name)))
+            .open(&format!("{}.aac", name.as_ref().unwrap_or(&space_name)))
             .await?;
         file.set_len(0).await?;
 
@@ -179,18 +181,18 @@ impl<'a> Space<'a> {
         Ok(())
     }
 
-    async fn stream(&'a self) -> Result<Stream<'a>> {
+    async fn stream(self) -> Result<Stream> {
         Stream::new(self).await
     }
 }
 
-struct Stream<'a> {
-    space: &'a Space<'a>,
+struct Stream {
+    space: Space,
     attrs: StreamAttrs,
 }
 
-impl<'a> Stream<'a> {
-    pub async fn new(space: &'a Space<'a>) -> Result<Stream<'a>> {
+impl Stream {
+    pub async fn new(space: Space) -> Result<Stream> {
         let start = Instant::now();
         let address = format!(
             "https://twitter.com/i/api/1.1/live_video_stream/status/{}",
@@ -282,7 +284,7 @@ impl<'a> Stream<'a> {
             .collect())
     }
 
-    pub fn location(&'a self) -> &'a str {
+    pub fn location(&self) -> &str {
         &self.attrs.source.location
     }
 }
