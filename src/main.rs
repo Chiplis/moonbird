@@ -1,17 +1,15 @@
-use std::fs::remove_file;
-use std::ops::{DerefMut};
-use std::path::Path;
 use again::RetryPolicy;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use futures::{stream::iter, StreamExt};
 use reqwest::header::AUTHORIZATION;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::fs::{remove_file, File, OpenOptions};
+use std::io::Write;
+use std::path::Path;
+use std::sync::mpsc::channel;
+use std::thread::spawn;
 use std::time::Duration;
-use parking_lot::const_mutex;
-use tokio::fs::{File, OpenOptions};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
@@ -177,7 +175,7 @@ impl Space {
             .append(true)
             .create(true)
             .open(file_name)
-            .await?;
+            .unwrap();
         let start = Instant::now();
         stream.download_fragments(concurrency, file).await?;
         println!("\nSpace downloaded in {}ms", start.elapsed().as_millis());
@@ -214,17 +212,22 @@ impl Stream {
         Ok(Self { attrs, space })
     }
 
-    pub async fn download_fragments(&self, concurrency: usize, final_file: File) -> Result<()> {
+    pub async fn download_fragments(&self, concurrency: usize, mut final_file: File) -> Result<()> {
+
+        let (tx, rx) = channel::<Vec<u8>>();
+        spawn(move || {
+            for _ in 0..size {
+                final_file.write_all(rx.recv().unwrap().as_slice()).unwrap();
+            }
+        });
+
         let base_uri = self
             .location()
             .split("playlist")
             .next()
             .ok_or_else(|| anyhow!("Could not parse base_uri from location"))?;
-
         let client = &reqwest::Client::new();
         let fragments = &self.fragments().await?;
-        let final_file = Arc::new(const_mutex(final_file));
-
         let size = fragments.len();
         let policy = &RetryPolicy::exponential(Duration::from_secs(1))
             .with_max_retries(5)
@@ -238,7 +241,7 @@ impl Stream {
             .enumerate()
             .map(|(index, fragment_name)| {
                 let url = format!("{base_uri}{fragment_name}");
-                let final_file = final_file.clone();
+                let tx = tx.clone();
                 async move {
                     let bytes = policy
                         .retry(|| client.get(&url).send())
@@ -246,26 +249,19 @@ impl Stream {
                         .expect(&format!("Error downloading fragment #{index}"))
                         .bytes()
                         .await
-                        .expect(&format!(
-                            "Error extracting bytes for fragment #{index}"
-                        ));
+                        .expect(&format!("Error extracting bytes for fragment #{index}"));
 
-                    (bytes.to_vec(), index, final_file)
+                    (bytes.to_vec(), index, tx)
                 }
             });
 
         iter(futures)
             .buffer_unordered(concurrency)
-            .for_each_concurrent(None, |(bytes, index, final_file)| async move {
+            .for_each_concurrent(None, |(bytes, index, tx)| async move {
                 if index != 0 {
                     notifications[index - 1].notified().await
                 }
-                final_file
-                    .lock()
-                    .deref_mut()
-                    .write_all(bytes.as_slice())
-                    .await
-                    .expect(&format!("Error writing fragment #{index}"));
+                tx.send(bytes).unwrap();
                 print!(" fragments remaining \r{}", size - index - 1);
                 notifications[index].notify_one();
             })
