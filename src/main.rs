@@ -214,13 +214,6 @@ impl Stream {
 
     pub async fn download_fragments(&self, concurrency: usize, mut final_file: File) -> Result<()> {
 
-        let (tx, rx) = channel::<Vec<u8>>();
-        spawn(move || {
-            for _ in 0..size {
-                final_file.write_all(rx.recv().unwrap().as_slice()).unwrap();
-            }
-        });
-
         let base_uri = self
             .location()
             .split("playlist")
@@ -229,6 +222,12 @@ impl Stream {
         let client = &reqwest::Client::new();
         let fragments = &self.fragments().await?;
         let size = fragments.len();
+        let (tx, rx) = channel::<Vec<u8>>();
+        spawn(move || {
+            for _ in 0..size {
+                final_file.write_all(rx.recv().unwrap().as_slice()).unwrap();
+            }
+        });
         let policy = &RetryPolicy::exponential(Duration::from_secs(1))
             .with_max_retries(5)
             .with_jitter(true);
